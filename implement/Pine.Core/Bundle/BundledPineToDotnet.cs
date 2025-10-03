@@ -3,6 +3,7 @@ using Pine.Core.DotNet;
 using System;
 using System.Collections.Frozen;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 
 namespace Pine.Core.Bundle;
@@ -10,11 +11,14 @@ namespace Pine.Core.Bundle;
 using CompiledDictionary =
     IReadOnlyDictionary<PineValue, Func<PineValue, PineValue?>>;
 
+using FileTree =
+    IReadOnlyDictionary<IReadOnlyList<string>, ReadOnlyMemory<byte>>;
+
 /// <summary>
 /// Pine functions and programs compiled to .NET which are bundled with the assembly.
 /// </summary>
 public record BundledPineToDotnet(
-    Func<Result<string, CompiledDictionary>> BuildDictionary)
+    Func<CompiledDictionary> BuildDictionary)
 {
     static public readonly System.Threading.Tasks.Task<BundledPineToDotnet> LoadBundledTask =
         System.Threading.Tasks.Task.Run(() => LoadFromEmbedded(Assembly.GetExecutingAssembly()));
@@ -25,11 +29,6 @@ public record BundledPineToDotnet(
     public const string ResourceFilePath = "prebuilt-artifact/pine-default-leaves.dll";
 
     public const string CompiledNamespacePrefix = "PrecompiledPineToDotNet";
-
-    private static readonly DeclQualifiedName
-        s_dispatcherDictionaryContainerTypeName =
-        DeclQualifiedName.FromString(
-            CompiledNamespacePrefix + ".Dispatcher");
 
     /// <summary>
     /// Loads <see cref="BundledPineToDotnet"/> from an assembly's embedded resource using <see cref="ResourceFilePath"/>.
@@ -81,16 +80,31 @@ public record BundledPineToDotnet(
     public static Result<string, BundledPineToDotnet> LoadFromAssembly(
         byte[] assemblyBytes)
     {
-        return
-            new BundledPineToDotnet(
-                () => CompileToAssembly.BuildDictionaryFromAssembly(
-                    assemblyBytes,
-                    s_dispatcherDictionaryContainerTypeName.FullName));
+        var searchResult =
+            CompileToAssembly.SearchDictionaryBuilderInAssembly(assemblyBytes);
+
+        {
+            if (searchResult.IsErrOrNull() is { } err)
+            {
+                return
+                    "Failed to find dictionary builder in compiled assembly: " + err;
+            }
+        }
+
+        if (searchResult.IsOkOrNull() is not { } buildDictionary)
+        {
+            throw new NotImplementedException(
+                "Unexpected return type: " + searchResult.GetType().FullName);
+        }
+
+        return new BundledPineToDotnet(buildDictionary);
     }
 
     public static void BuildAndWriteBundleFile(
         ElmInteractiveEnvironment.ParsedInteractiveEnvironment parsedEnvironment,
-        string? destinationDirectory = null)
+        string destinationDirectory,
+        Action<string> logger,
+        bool writeCSharpFilesArchive)
     {
         var parseCache = new PineVMParseCache();
 
@@ -101,7 +115,11 @@ public record BundledPineToDotnet(
                 parseCache: parseCache)
             .Extract(err => throw new Exception("Failed parsing as static program: " + err));
 
-        BuildAndWriteBundleFile(staticProgram, destinationDirectory: destinationDirectory);
+        BuildAndWriteBundleFile(
+            staticProgram,
+            destinationDirectory: destinationDirectory,
+            logger: logger,
+            writeCSharpFilesArchive);
     }
 
     private static bool IncludeDeclarationDefault(DeclQualifiedName name)
@@ -131,14 +149,39 @@ public record BundledPineToDotnet(
 
     private static void BuildAndWriteBundleFile(
         StaticProgram staticProgram,
-        string? destinationDirectory)
+        string destinationDirectory,
+        Action<string> logger,
+        bool writeCSharpFilesArchive)
     {
-        var fileContent = BuildBundleFile(staticProgram);
+        var bundleContent = BuildBundleFile(staticProgram);
 
-        WriteBundleFile(fileContent, destinationDirectory);
+        var csharpFilesAggregateSize =
+            bundleContent.csharpFiles.Values
+            .Sum(fileContent => fileContent.Length);
+
+        logger(
+            "Compiled static program to " +
+            CommandLineInterface.FormatIntegerForDisplay(bundleContent.csharpFiles.Count) +
+            " C# files, totaling " +
+            CommandLineInterface.FormatIntegerForDisplay(csharpFilesAggregateSize) +
+            " bytes of C# code:");
+
+        foreach (var filePathAndContent in bundleContent.csharpFiles)
+        {
+            logger(
+                " - " + string.Join('/', filePathAndContent.Key) + ": " +
+                CommandLineInterface.FormatIntegerForDisplay(filePathAndContent.Value.Length) +
+                " bytes");
+        }
+
+        logger(
+            "Compiled C# files to " +
+            CommandLineInterface.FormatIntegerForDisplay(bundleContent.assemblyBytes.Length) + " bytes of .NET assembly.");
+
+        WriteBundleFile(bundleContent.assemblyBytes, destinationDirectory);
     }
 
-    public static ReadOnlyMemory<byte> BuildBundleFile(
+    public static (FileTree csharpFiles, ReadOnlyMemory<byte> assemblyBytes) BuildBundleFile(
         StaticProgram staticProgram)
     {
         var asCSharp =
@@ -146,28 +189,26 @@ public record BundledPineToDotnet(
                 staticProgram,
                 DeclarationSyntaxContext.None);
 
+        var csharpFiles =
+            asCSharp.BuildCSharpProjectFiles(
+                namespacePrefix: CompiledNamespacePrefix.Split('.'));
+
         var compileToAssemblyResult =
             CompileToAssembly.Compile(
-                asCSharp,
-                namespacePrefix: CompiledNamespacePrefix.Split('.'),
+                csharpFiles,
                 optimizationLevel: Microsoft.CodeAnalysis.OptimizationLevel.Release)
             .Extract(err =>
             throw new Exception("Compilation to assembly failed: " + err));
 
-        return compileToAssemblyResult.Assembly;
+        return (csharpFiles, compileToAssemblyResult.Assembly);
     }
 
     private static void WriteBundleFile(
         ReadOnlyMemory<byte> fileContent,
-        string? destinationDirectory = null)
+        string destinationDirectory)
     {
         Console.WriteLine(
             "Current working directory: " + Environment.CurrentDirectory);
-
-        if (string.IsNullOrEmpty(destinationDirectory))
-        {
-            destinationDirectory = Environment.CurrentDirectory;
-        }
 
         Console.WriteLine(
             "Using destination directory: " + destinationDirectory);
