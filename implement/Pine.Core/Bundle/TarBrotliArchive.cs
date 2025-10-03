@@ -21,7 +21,7 @@ public static class TarBrotliArchive
     {
         // Create TAR archive first
         using var tarStream = new MemoryStream();
-        
+
         using (var tarWriter = SharpCompress.Writers.WriterFactory.Open(
             tarStream,
             SharpCompress.Common.ArchiveType.Tar,
@@ -31,18 +31,18 @@ public static class TarBrotliArchive
             {
                 var filePath = string.Join("/", file.Key);
                 var fileContent = file.Value;
-                
+
                 using var contentStream = new MemoryStream(fileContent.ToArray());
                 tarWriter.Write(filePath, contentStream, modificationTime: null);
             }
         }
-        
+
         tarStream.Position = 0;
-        
+
         // Compress with Brotli
         var tarBytes = tarStream.ToArray();
         using var compressedStream = new MemoryStream();
-        
+
         using (var brotliStream = new BrotliStream(
             compressedStream,
             CompressionLevel.Optimal,
@@ -50,7 +50,7 @@ public static class TarBrotliArchive
         {
             brotliStream.Write(tarBytes);
         }
-        
+
         return compressedStream.ToArray();
     }
 
@@ -65,33 +65,33 @@ public static class TarBrotliArchive
         // Decompress with Brotli
         using var compressedStream = new MemoryStream(archiveBytes.ToArray());
         using var decompressedStream = new MemoryStream();
-        
+
         using (var brotliStream = new BrotliStream(
             compressedStream,
             CompressionMode.Decompress))
         {
             brotliStream.CopyTo(decompressedStream);
         }
-        
+
         var tarBytes = decompressedStream.ToArray();
-        
+
         // Extract files from TAR
         using var tarStream = new MemoryStream(tarBytes);
         using var tarArchive = SharpCompress.Archives.Tar.TarArchive.Open(tarStream);
-        
+
         var files = new Dictionary<IReadOnlyList<string>, ReadOnlyMemory<byte>>();
-        
+
         foreach (var entry in tarArchive.Entries.Where(e => !e.IsDirectory))
         {
             var pathSegments = entry.Key.Split('/').ToList();
-            
+
             using var entryStream = entry.OpenEntryStream();
             using var contentStream = new MemoryStream();
             entryStream.CopyTo(contentStream);
-            
+
             files[pathSegments] = contentStream.ToArray();
         }
-        
+
         return files;
     }
 }

@@ -179,6 +179,11 @@ public record BundledPineToDotnet(
             CommandLineInterface.FormatIntegerForDisplay(bundleContent.assemblyBytes.Length) + " bytes of .NET assembly.");
 
         WriteBundleFile(bundleContent.assemblyBytes, destinationDirectory);
+
+        if (writeCSharpFilesArchive)
+        {
+            WriteBundleArchiveFile(bundleContent.csharpFiles, destinationDirectory, logger);
+        }
     }
 
     public static (FileTree csharpFiles, ReadOnlyMemory<byte> assemblyBytes) BuildBundleFile(
@@ -232,5 +237,33 @@ public record BundledPineToDotnet(
         Console.WriteLine(
             "Saved the prebuilt dictionary to " + absolutePath);
     }
+
+    private static void WriteBundleArchiveFile(
+        FileTree csharpFiles,
+        string destinationDirectory,
+        Action<string> logger)
+    {
+        var archiveBytes = TarBrotliArchive.CreateArchive(csharpFiles);
+
+        // Write archive file in the same directory as the assembly file
+        var assemblyDirectory = System.IO.Path.GetDirectoryName(
+            System.IO.Path.Combine(destinationDirectory, ResourceFilePath));
+
+        var archiveFileName = "pine-csharp-files.tar.br";
+        var archiveFilePath = System.IO.Path.Combine(assemblyDirectory!, archiveFileName);
+        var absoluteArchivePath = System.IO.Path.GetFullPath(archiveFilePath);
+
+        System.IO.File.WriteAllBytes(
+            absoluteArchivePath,
+            archiveBytes.ToArray());
+
+        logger(
+            "Created C# files archive with " +
+            CommandLineInterface.FormatIntegerForDisplay(archiveBytes.Length) +
+            " bytes (compressed from " +
+            CommandLineInterface.FormatIntegerForDisplay(csharpFiles.Values.Sum(v => v.Length)) +
+            " bytes) at " + absoluteArchivePath);
+    }
 }
+
 

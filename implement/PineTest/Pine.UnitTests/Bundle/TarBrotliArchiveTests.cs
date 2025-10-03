@@ -21,7 +21,7 @@ public class TarBrotliArchiveTests
         var extracted = TarBrotliArchive.ExtractArchive(archive);
 
         extracted.Count.Should().Be(1);
-        
+
         // Check by converting paths to strings for comparison
         var extractedFile = extracted.Single(kvp => string.Join("/", kvp.Key) == "test.txt");
         var extractedBytes = extractedFile.Value.ToArray();
@@ -48,17 +48,17 @@ public class TarBrotliArchiveTests
         var extracted = TarBrotliArchive.ExtractArchive(archive);
 
         extracted.Count.Should().Be(4);
-        
+
         // Convert to string-keyed dictionaries for easier comparison
         var extractedByPath = extracted.ToDictionary(
             kvp => string.Join("/", kvp.Key),
             kvp => kvp.Value);
-        
+
         foreach (var (key, value) in files)
         {
             var pathString = string.Join("/", key);
             extractedByPath.Should().ContainKey(pathString);
-            
+
             var extractedBytes = extractedByPath[pathString].ToArray();
             var expectedBytes = value.ToArray();
             extractedBytes.Length.Should().Be(expectedBytes.Length);
@@ -103,7 +103,7 @@ public class TarBrotliArchiveTests
         };
 
         var archive = TarBrotliArchive.CreateArchive(files);
-        
+
         var originalSize = files.Values.Sum(v => v.Length);
         var compressedSize = archive.Length;
 
@@ -125,17 +125,17 @@ public class TarBrotliArchiveTests
         var extracted = TarBrotliArchive.ExtractArchive(archive);
 
         extracted.Count.Should().Be(2);
-        
+
         // Convert to string-keyed dictionaries for easier comparison
         var extractedByPath = extracted.ToDictionary(
             kvp => string.Join("/", kvp.Key),
             kvp => kvp.Value);
-        
+
         foreach (var (key, value) in files)
         {
             var pathString = string.Join("/", key);
             extractedByPath.Should().ContainKey(pathString);
-            
+
             var extractedBytes = extractedByPath[pathString].ToArray();
             var expectedBytes = value.ToArray();
             extractedBytes.Length.Should().Be(expectedBytes.Length);
