@@ -511,11 +511,27 @@ public record StaticProgramCSharpClass(
                         statement: trueBranchCompiled.Statement,
                         @else: null);
 
+                // Build statements without declarations first to determine which are actually used
+                var statementsWithoutDeclarations =
+                    new List<StatementSyntax>
+                    {
+                        ifStatementNoElse
+                    };
+                statementsWithoutDeclarations.AddRange(ExtractStatements(falseBranchCompiled.Statement));
+
+                // Enumerate all identifiers referenced in the generated statements
+                var referencedIdentifiers =
+                    statementsWithoutDeclarations
+                    .SelectMany(EnumerateReferencedIdentifiers)
+                    .Concat(EnumerateReferencedIdentifiers(conditionExpr));
+
+                // Filter declarations to only include those that are transitively referenced
+                var usedDeclaredStatements = FilterUsedDeclarations(newDeclaredStatements, referencedIdentifiers);
+
                 IReadOnlyList<StatementSyntax> allStatementsNoElse =
                     [
-                        .. newDeclaredStatements,
-                        ifStatementNoElse,
-                        .. ExtractStatements(falseBranchCompiled.Statement)
+                        .. usedDeclaredStatements,
+                        .. statementsWithoutDeclarations
                     ];
 
                 var unionLocals = newlyDeclaredLocals.ToImmutable().Union(trueBranchCompiled.DeclaredLocals).Union(falseBranchCompiled.DeclaredLocals);
@@ -541,9 +557,17 @@ public record StaticProgramCSharpClass(
                     statement: trueBranchCompiled.Statement,
                     @else: SyntaxFactory.ElseClause(falseBranchCompiledNormal.Statement));
 
+            // Enumerate all identifiers referenced in the generated statements
+            var referencedIdentifiersNormal =
+                EnumerateReferencedIdentifiers(ifStatement)
+                .Concat(EnumerateReferencedIdentifiers(conditionExpr));
+
+            // Filter declarations to only include those that are transitively referenced
+            var usedDeclaredStatementsNormal = FilterUsedDeclarations(newDeclaredStatements, referencedIdentifiersNormal);
+
             IReadOnlyList<StatementSyntax> allStatements =
                 [
-                .. newDeclaredStatements,
+                .. usedDeclaredStatementsNormal,
                 ifStatement,
                 ];
 
@@ -553,10 +577,18 @@ public record StaticProgramCSharpClass(
         }
 
         {
+            var resultStatements = statementsFromResult(expression, newAlreadyDeclared);
+
+            // Enumerate all identifiers referenced in the result statements
+            var referencedIdentifiersSimple = resultStatements.SelectMany(EnumerateReferencedIdentifiers);
+
+            // Filter declarations to only include those that are transitively referenced
+            var usedDeclaredStatementsSimple = FilterUsedDeclarations(newDeclaredStatements, referencedIdentifiersSimple);
+
             IReadOnlyList<StatementSyntax> allStatements =
                 [
-                .. newDeclaredStatements,
-                .. statementsFromResult(expression, newAlreadyDeclared)
+                .. usedDeclaredStatementsSimple,
+                .. resultStatements
                 ];
 
             return new CompiledStatement(SyntaxFactory.Block(allStatements), newlyDeclaredLocals.ToImmutable());
@@ -591,6 +623,68 @@ public record StaticProgramCSharpClass(
         }
 
         return [statement];
+    }
+
+    /// <summary>
+    /// Enumerates all identifier names referenced in the given syntax node.
+    /// This is used to determine which local variable declarations are actually used.
+    /// </summary>
+    private static IEnumerable<string> EnumerateReferencedIdentifiers(SyntaxNode syntaxNode)
+    {
+        return syntaxNode
+            .DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Select(identifier => identifier.Identifier.ValueText);
+    }
+
+    /// <summary>
+    /// Filters declarations to only include those that are transitively referenced.
+    /// This eliminates declarations for expressions that were replaced by specialized interfaces.
+    /// </summary>
+    private static IReadOnlyList<LocalDeclarationStatementSyntax> FilterUsedDeclarations(
+        IReadOnlyList<LocalDeclarationStatementSyntax> allDeclarations,
+        IEnumerable<string> initiallyReferencedIdentifiers)
+    {
+        // Build a map of declared names to their declarations and the identifiers they reference
+        var declarationMap = new Dictionary<string, (LocalDeclarationStatementSyntax decl, ImmutableHashSet<string> referencedIds)>();
+
+        foreach (var decl in allDeclarations)
+        {
+            var declaredName = decl.Declaration.Variables[0].Identifier.ValueText;
+            var referencedIds = EnumerateReferencedIdentifiers(decl).ToImmutableHashSet();
+            declarationMap[declaredName] = (decl, referencedIds);
+        }
+
+        // Start with the initially referenced identifiers and collect transitive dependencies
+        var usedIdentifiers = new HashSet<string>();
+        var queue = new Queue<string>(initiallyReferencedIdentifiers);
+
+        while (queue.Count > 0)
+        {
+            var identifier = queue.Dequeue();
+
+            if (!usedIdentifiers.Add(identifier))
+            {
+                continue; // Already processed
+            }
+
+            // If this identifier is declared locally, add its dependencies to the queue
+            if (declarationMap.TryGetValue(identifier, out var declInfo))
+            {
+                foreach (var referencedId in declInfo.referencedIds)
+                {
+                    if (!usedIdentifiers.Contains(referencedId))
+                    {
+                        queue.Enqueue(referencedId);
+                    }
+                }
+            }
+        }
+
+        // Filter declarations to only those that are used, preserving original order
+        return allDeclarations
+            .Where(decl => usedIdentifiers.Contains(decl.Declaration.Variables[0].Identifier.ValueText))
+            .ToList();
     }
 
     public static CompiledCSharpExpression CompileToCSharpExpression(
