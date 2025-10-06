@@ -4,7 +4,6 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Pine.Core;
 using Pine.Core.CodeAnalysis;
 using Pine.Core.DotNet;
-using Pine.Core.Internal;
 using Pine.Core.PineVM;
 using Pine.Core.PopularEncodings;
 using System.Collections.Generic;
